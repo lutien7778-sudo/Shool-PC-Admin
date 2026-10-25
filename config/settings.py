@@ -4,6 +4,8 @@
 
 import json
 import os
+import shutil
+import sys
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional
 
@@ -35,7 +37,24 @@ DEFAULT_SSH_PORT = 22
 DEFAULT_TIMEOUT_SEC = 6
 DEFAULT_MAX_WORKERS = 20
 
-PROFILES_FILE = os.path.join(os.path.dirname(__file__), "profiles.json")
+
+def get_default_profiles_file() -> str:
+    """Определяет путь к файлу профилей с учетом сред сборки (AppImage / PyInstaller)."""
+    bundled_file = os.path.join(os.path.dirname(__file__), "profiles.json")
+    if os.environ.get("APPIMAGE") or os.environ.get("APPDIR") or getattr(sys, "frozen", False):
+        user_config_dir = os.path.join(os.path.expanduser("~"), ".config", "schooladm")
+        os.makedirs(user_config_dir, exist_ok=True)
+        user_file = os.path.join(user_config_dir, "profiles.json")
+        if not os.path.exists(user_file) and os.path.exists(bundled_file):
+            try:
+                shutil.copyfile(bundled_file, user_file)
+            except Exception:
+                pass
+        return user_file
+    return bundled_file
+
+
+PROFILES_FILE = get_default_profiles_file()
 
 
 @dataclass

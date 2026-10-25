@@ -1,0 +1,10 @@
+#!/bin/sh
+# AppRun entrypoint script for SchoolAdm AppImage
+SELF=$(readlink -f "$0")
+HERE=${APPDIR:-$(dirname "$SELF")}
+
+export PATH="${HERE}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
+
+exec "${HERE}/usr/bin/SchoolAdm" "$@"

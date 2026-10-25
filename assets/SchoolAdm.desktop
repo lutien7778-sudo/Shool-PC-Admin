@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SchoolAdm
+GenericName=Центр управления компьютерным классом
+Comment=Администрирование школьных компьютеров по SSH и SFTP
+Exec=SchoolAdm
+Icon=schooladm
+Categories=System;Network;Education;RemoteAccess;
+Terminal=false
+StartupNotify=true
+Keywords=ssh;sftp;admin;school;education;remote;

@@ -7,9 +7,11 @@ SchoolAdm — Кроссплатформенное графическое при
 Архитектуры: x86_64, ARM (aarch64).
 """
 
+import os
 import sys
 import traceback
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from ui.main_window import MainWindow
@@ -43,6 +45,11 @@ def main():
     app.setApplicationName("SchoolAdm")
     app.setOrganizationName("SchoolLab")
     app.setApplicationDisplayName("SchoolAdm — Центр управления компьютерным классом")
+
+    # Установка иконки приложения
+    icon_path = os.path.join(os.path.dirname(__file__), "assets", "schooladm.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
 
     # Применяем современную темную тему
     app.setStyleSheet(DARK_THEME_QSS)

@@ -1,0 +1,137 @@
+name: Build AppImage
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build AppImage (Ubuntu 22.04)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfuse2 \
+            file \
+            desktop-file-utils \
+            libgl1 \
+            libegl1 \
+            libxkbcommon-x11-0 \
+            libdbus-1-3 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-sync1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller \
+            --name SchoolAdm \
+            --onedir \
+            --windowed \
+            --clean \
+            --noconfirm \
+            --add-data "config/profiles.json:config" \
+            --add-data "assets/schooladm.png:assets" \
+            main.py
+
+      - name: Download and prepare appimagetool
+        run: |
+          curl -fsSL -o appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage || \
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract
+
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+          # Копируем скомпилированные файлы PyInstaller
+          cp -r dist/SchoolAdm/* AppDir/usr/bin/
+
+          # Устанавливаем .desktop файл
+          cp assets/SchoolAdm.desktop AppDir/SchoolAdm.desktop
+          cp assets/SchoolAdm.desktop AppDir/usr/share/applications/SchoolAdm.desktop
+          desktop-file-validate AppDir/SchoolAdm.desktop
+
+          # Устанавливаем иконку приложения
+          cp assets/schooladm.png AppDir/schooladm.png
+          cp assets/schooladm.png AppDir/.DirIcon
+          cp assets/schooladm.png AppDir/usr/share/icons/hicolor/256x256/apps/schooladm.png
+
+          # Устанавливаем точку входа AppRun
+          cp assets/AppRun AppDir/AppRun
+          chmod +x AppDir/AppRun
+
+      - name: Build AppImage
+        run: |
+          export ARCH=x86_64
+          ./squashfs-root/AppRun --no-appstream AppDir SchoolAdm-x86_64.AppImage
+          chmod +x SchoolAdm-x86_64.AppImage
+          ls -lh SchoolAdm-x86_64.AppImage
+
+      - name: Verify AppImage extraction
+        run: |
+          ./SchoolAdm-x86_64.AppImage --appimage-extract
+          test -f squashfs-root/AppRun
+          test -f squashfs-root/usr/bin/SchoolAdm
+          echo "AppImage integrity verified successfully!"
+          rm -rf squashfs-root
+
+      - name: Upload AppImage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SchoolAdm-x86_64.AppImage
+          path: SchoolAdm-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Publish Release (on Git Tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SchoolAdm-x86_64.AppImage
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

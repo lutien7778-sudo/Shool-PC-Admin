@@ -62,6 +62,13 @@ jobs:
         run: |
           python -m unittest discover -s tests
 
+      - name: Prepare configuration files
+        run: |
+          mkdir -p config
+          if [ ! -f config/profiles.json ]; then
+            echo "{}" > config/profiles.json
+          fi
+
       - name: Build executable with PyInstaller
         run: |
           pyinstaller \

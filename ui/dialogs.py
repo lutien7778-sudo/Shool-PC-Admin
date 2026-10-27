@@ -148,9 +148,17 @@ class FileTransferDialog(QDialog):
             arg_form.addRow("Аргументы запуска:", self.edit_args)
             run_layout.addLayout(arg_form)
 
-            self.chk_bg = QCheckBox("Запустить в фоне (nohup ... > /tmp/exec_bg.log 2>&1 &)")
+            self.chk_bg = QCheckBox("Запустить в фоне (nohup ... > /tmp/exec_bg.log 2>&1 < /dev/null &)")
             self.chk_bg.setToolTip("Файл продолжит работу на ПК в фоновом режиме даже после отключения SSH")
             run_layout.addWidget(self.chk_bg)
+
+            self.chk_gui = QCheckBox("Графическое приложение (GUI, DISPLAY=:0)")
+            self.chk_gui.setToolTip("Полное отсоединение процесса с переменными DISPLAY и WAYLAND_DISPLAY")
+            run_layout.addWidget(self.chk_gui)
+
+            self.chk_terminal = QCheckBox("Запустить в графическом терминале (qterminal)")
+            self.chk_terminal.setToolTip("Запуск в окне qterminal на рабочем столе пользователя с интерактивным bash")
+            run_layout.addWidget(self.chk_terminal)
 
             layout.addWidget(run_group)
 
@@ -199,6 +207,8 @@ class FileTransferDialog(QDialog):
             "remote_path": self.edit_remote.text().strip(),
             "arguments": self.edit_args.text().strip() if self.and_run else "",
             "run_in_background": self.chk_bg.isChecked() if self.and_run else False,
+            "is_gui_app": self.chk_gui.isChecked() if self.and_run else False,
+            "in_terminal": self.chk_terminal.isChecked() if self.and_run else False,
         }
 
 
@@ -230,6 +240,14 @@ class RunExistingFileDialog(QDialog):
         self.chk_bg = QCheckBox("Запустить в фоновом режиме (в фоне через nohup)")
         layout.addWidget(self.chk_bg)
 
+        self.chk_gui = QCheckBox("Графическое приложение (GUI, DISPLAY=:0)")
+        self.chk_gui.setToolTip("Полное отсоединение процесса с переменными DISPLAY и WAYLAND_DISPLAY")
+        layout.addWidget(self.chk_gui)
+
+        self.chk_terminal = QCheckBox("Запустить в графическом терминале (qterminal)")
+        self.chk_terminal.setToolTip("Запуск в окне qterminal на рабочем столе пользователя с интерактивным bash")
+        layout.addWidget(self.chk_terminal)
+
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
@@ -255,6 +273,8 @@ class RunExistingFileDialog(QDialog):
             "remote_path": self.edit_path.text().strip(),
             "arguments": self.edit_args.text().strip(),
             "run_in_background": self.chk_bg.isChecked(),
+            "is_gui_app": self.chk_gui.isChecked(),
+            "in_terminal": self.chk_terminal.isChecked(),
         }
 
 

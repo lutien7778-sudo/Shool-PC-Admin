@@ -27,7 +27,7 @@ class SSHHostWorker:
         port: int = 22,
         username: str = "root",
         password: str = "",
-        timeout: int = 6,
+        timeout: int = 15,  # Увеличен с 6 до 15 секунд
         use_sudo: bool = False,
     ):
         self.ip = ip
@@ -94,7 +94,7 @@ class SSHHostWorker:
 
         # 1. Быстрая проверка TCP-порта перед полным SSH-хэндшейком
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(min(3.0, float(self.timeout)))
+        sock.settimeout(min(15.0, float(self.timeout)))
         try:
             res = sock.connect_ex((self.ip, self.port))
             if res != 0:
@@ -144,15 +144,17 @@ class SSHHostWorker:
         command: str,
         log_callback: Optional[Callable[[str, str], None]] = None,
         cmd_timeout: Optional[int] = None,
+        wait_for_completion: bool = True,
     ) -> Tuple[int, str]:
         """
         Выполняет shell-команду на удаленном хосте с потоковым выводом stdout/stderr.
-        
+
         Параметры:
             command: Команда для выполнения (при use_sudo предварительно оборачивается)
             log_callback: Функция log_callback(stream_type, line), stream_type in ('out', 'err', 'info')
             cmd_timeout: Таймаут выполнения в секундах (None = без ограничений)
-            
+            wait_for_completion: Если False, не ждет завершения команды (для фоновых GUI-задач)
+
         Возвращает:
             (exit_code, full_output)
         """
@@ -188,6 +190,16 @@ class SSHHostWorker:
             if self.use_sudo and self.password:
                 # Отправляем пароль при старте для sudo -S
                 channel.send(self.password + "\n")
+
+            # Если не ждем завершения (фоновые GUI-задачи), сразу фиксируем статус и закрываем канал
+            if not wait_for_completion:
+                time.sleep(0.3)
+                emit("info", "Команда отправлена на выполнение (фоновый режим)")
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                return 0, "Успешно запущен в фоне"
 
             # Читаем вывод из канала в реальном времени
             buffer = ""

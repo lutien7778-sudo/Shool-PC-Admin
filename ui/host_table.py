@@ -1,15 +1,20 @@
 """
 Таблица хостов с цветовыми индикаторами статуса,
-информацией об ОС/архитектуре и привязкой к логам.
+информацией об ОС/архитектуре, индивидуальными учетными данными,
+контекстным меню и множественным выделением строк.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMenu,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QWidget,
@@ -21,21 +26,30 @@ from ui.styles import get_status_badge_html
 class HostTableWidget(QTableWidget):
     """
     Таблица компьютеров класса.
-    По клику на строку отправляет сигнал host_selected(ip) для фильтрации логов.
+    Поддерживает:
+    - Выделение одной или нескольких строк (SelectRows, ExtendedSelection)
+    - Индивидуальные логины и пароли (скрываемые/отображаемые столбцы)
+    - Контекстное меню по правому клику (Проверить связь, Команда, Передать файл, Перезагрузить, Выключить)
+    - Сигналы выбора хоста и запроса контекстных действий
     """
     host_selected = pyqtSignal(str)
+    context_action_requested = pyqtSignal(str, list)  # action_name, list_of_ips
 
     COL_IP = 0
     COL_HOSTNAME = 1
-    COL_OS_ARCH = 2
-    COL_STATUS = 3
-    COL_PING = 4
-    COL_DISK_UPTIME = 5
-    COL_DETAILS = 6
+    COL_LOGIN = 2
+    COL_PASSWORD = 3
+    COL_OS_ARCH = 4
+    COL_STATUS = 5
+    COL_PING = 6
+    COL_DISK_UPTIME = 7
+    COL_DETAILS = 8
 
     HEADERS = [
         "IP-адрес",
         "Имя хоста",
+        "Логин",
+        "Пароль",
         "ОС / Архитектура",
         "Статус",
         "Связь",
@@ -48,7 +62,7 @@ class HostTableWidget(QTableWidget):
         self.setColumnCount(len(self.HEADERS))
         self.setHorizontalHeaderLabels(self.HEADERS)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(True)
@@ -56,16 +70,30 @@ class HostTableWidget(QTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(self.COL_IP, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COL_HOSTNAME, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_LOGIN, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(self.COL_LOGIN, 110)
+        header.setSectionResizeMode(self.COL_PASSWORD, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(self.COL_PASSWORD, 150)
         header.setSectionResizeMode(self.COL_OS_ARCH, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COL_PING, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COL_DISK_UPTIME, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COL_DETAILS, QHeaderView.ResizeMode.Stretch)
 
+        self._individual_mode = False
         self._ip_to_row: Dict[str, int] = {}
         self._host_info: Dict[str, dict] = {}
+        self._host_inputs: Dict[str, Tuple[QLineEdit, QLineEdit]] = {}
+
+        # По умолчанию скрываем столбцы индивидуальных логинов/паролей
+        self.setColumnHidden(self.COL_LOGIN, True)
+        self.setColumnHidden(self.COL_PASSWORD, True)
 
         self.itemClicked.connect(self._on_item_clicked)
+
+        # Контекстное меню
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_custom_context_menu)
 
     def _on_item_clicked(self, item: QTableWidgetItem):
         row = item.row()
@@ -73,11 +101,80 @@ class HostTableWidget(QTableWidget):
         if ip_item:
             self.host_selected.emit(ip_item.text())
 
-    def set_hosts(self, ips: List[str]):
-        """Заполняет таблицу списком IP-адресов."""
+    def _on_custom_context_menu(self, pos):
+        item = self.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        selected_rows = set(idx.row() for idx in self.selectedIndexes())
+        if row not in selected_rows:
+            self.selectRow(row)
+
+        ips = self.get_selected_ips()
+        if not ips:
+            return
+
+        menu = QMenu(self)
+        act_ping = menu.addAction("📡 Проверить связь")
+        act_cmd = menu.addAction("⌨️ Выполнить произвольную команду...")
+        act_upload = menu.addAction("📁 Передать файл...")
+        menu.addSeparator()
+        act_reboot = menu.addAction("🔁 Перезагрузить")
+        act_poweroff = menu.addAction("⏻ Выключить")
+
+        action = menu.exec(self.viewport().mapToGlobal(pos))
+        if not action:
+            return
+
+        if action == act_ping:
+            self.context_action_requested.emit("ping", ips)
+        elif action == act_cmd:
+            self.context_action_requested.emit("custom_command", ips)
+        elif action == act_upload:
+            self.context_action_requested.emit("upload", ips)
+        elif action == act_reboot:
+            self.context_action_requested.emit("reboot", ips)
+        elif action == act_poweroff:
+            self.context_action_requested.emit("poweroff", ips)
+
+    def get_selected_ips(self) -> List[str]:
+        """Возвращает список IP-адресов выделенных строк."""
+        selected_rows = sorted(set(idx.row() for idx in self.selectedIndexes()))
+        ips = []
+        for r in selected_rows:
+            ip_item = self.item(r, self.COL_IP)
+            if ip_item and ip_item.text():
+                ips.append(ip_item.text())
+        return ips
+
+    def set_individual_credentials_mode(self, enabled: bool, default_login: str = "", default_password: str = ""):
+        """Переключает видимость столбцов индивидуальных учетных данных."""
+        self._individual_mode = enabled
+        self.setColumnHidden(self.COL_LOGIN, not enabled)
+        self.setColumnHidden(self.COL_PASSWORD, not enabled)
+
+        if enabled:
+            # Заполняем пустые поля значениями по умолчанию
+            for ip, (login_edit, pass_edit) in self._host_inputs.items():
+                if not login_edit.text() and default_login:
+                    login_edit.setText(default_login)
+                if not pass_edit.text() and default_password:
+                    pass_edit.setText(default_password)
+
+    def set_hosts(
+        self,
+        ips: List[str],
+        host_credentials: Optional[Dict[str, Dict[str, str]]] = None,
+        default_login: str = "",
+        default_password: str = "",
+    ):
+        """Заполняет таблицу списком IP-адресов и учетными данными."""
         self.setRowCount(len(ips))
         self._ip_to_row.clear()
         self._host_info.clear()
+        self._host_inputs.clear()
+
+        host_creds = host_credentials or {}
 
         for row, ip in enumerate(ips):
             self._ip_to_row[ip] = row
@@ -89,6 +186,46 @@ class HostTableWidget(QTableWidget):
             item_host = QTableWidgetItem("—")
             item_host.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, self.COL_HOSTNAME, item_host)
+
+            # Редактируемый логин
+            login_edit = QLineEdit()
+            login_edit.setPlaceholderText("Логин")
+            user_val = host_creds.get(ip, {}).get("username", default_login)
+            login_edit.setText(user_val)
+            self.setCellWidget(row, self.COL_LOGIN, login_edit)
+
+            # Редактируемый пароль с кнопкой скрытия/показа
+            pass_container = QWidget()
+            pass_layout = QHBoxLayout(pass_container)
+            pass_layout.setContentsMargins(2, 2, 2, 2)
+            pass_layout.setSpacing(2)
+
+            pass_edit = QLineEdit()
+            pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            pass_edit.setPlaceholderText("Пароль")
+            pass_val = host_creds.get(ip, {}).get("password", default_password)
+            pass_edit.setText(pass_val)
+            pass_layout.addWidget(pass_edit)
+
+            btn_peek = QPushButton("👁️")
+            btn_peek.setFixedWidth(28)
+            btn_peek.setToolTip("Показать/скрыть пароль")
+
+            def make_toggle(pe: QLineEdit, bp: QPushButton):
+                def toggle():
+                    if pe.echoMode() == QLineEdit.EchoMode.Password:
+                        pe.setEchoMode(QLineEdit.EchoMode.Normal)
+                        bp.setText("🙈")
+                    else:
+                        pe.setEchoMode(QLineEdit.EchoMode.Password)
+                        bp.setText("👁️")
+                return toggle
+
+            btn_peek.clicked.connect(make_toggle(pass_edit, btn_peek))
+            pass_layout.addWidget(btn_peek)
+
+            self.setCellWidget(row, self.COL_PASSWORD, pass_container)
+            self._host_inputs[ip] = (login_edit, pass_edit)
 
             item_os = QTableWidgetItem("—")
             item_os.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -107,6 +244,30 @@ class HostTableWidget(QTableWidget):
 
             item_details = QTableWidgetItem("Готов к работе")
             self.setItem(row, self.COL_DETAILS, item_details)
+
+        # Синхронизируем видимость колонок логина и пароля
+        self.setColumnHidden(self.COL_LOGIN, not self._individual_mode)
+        self.setColumnHidden(self.COL_PASSWORD, not self._individual_mode)
+
+    def get_host_credentials(self) -> Dict[str, Dict[str, str]]:
+        """Возвращает индивидуальные логины и пароли всех хостов таблицы."""
+        result = {}
+        for ip, (login_edit, pass_edit) in self._host_inputs.items():
+            result[ip] = {
+                "username": login_edit.text().strip(),
+                "password": pass_edit.text(),
+            }
+        return result
+
+    def get_credentials_for_host(self, ip: str) -> Optional[Dict[str, str]]:
+        """Возвращает учетные данные конкретного хоста."""
+        if ip in self._host_inputs:
+            login_edit, pass_edit = self._host_inputs[ip]
+            return {
+                "username": login_edit.text().strip(),
+                "password": pass_edit.text(),
+            }
+        return None
 
     def _set_status_badge(self, row: int, status_text: str):
         badge_label = QLabel()

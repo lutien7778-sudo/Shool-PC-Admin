@@ -319,6 +319,42 @@ QStatusBar {
     color: #a5adcb;
     font-size: 12px;
 }
+
+/* Контекстное меню */
+QMenu {
+    background-color: #1e2030;
+    border: 1px solid #494d64;
+    border-radius: 6px;
+    padding: 4px;
+    color: #cad3f5;
+}
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 4px;
+}
+QMenu::item:selected {
+    background-color: #363a4f;
+    color: #8aadf4;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #363a4f;
+    margin: 4px 6px;
+}
+
+/* Поля ввода внутри ячеек таблицы */
+QTableWidget QLineEdit {
+    background-color: #24273a;
+    border: 1px solid #363a4f;
+    border-radius: 4px;
+    padding: 2px 6px;
+    color: #cad3f5;
+    font-size: 12px;
+}
+QTableWidget QLineEdit:focus {
+    border: 1px solid #8aadf4;
+    background-color: #2a2e46;
+}
 """
 
 

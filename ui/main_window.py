@@ -1,7 +1,7 @@
 """
 Главное окно приложения SchoolAdm на PyQt6.
 Интегрирует блок подключения, выбор ОС/архитектуры, действия,
-таблицу хостов и консоль терминала.
+таблицу хостов с индивидуальными кредами, быструю командную строку и консоль терминала.
 """
 
 from typing import List, Optional
@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SchoolAdm — Панель администрирования компьютерного класса (SSH/SFTP)")
-        self.resize(1240, 820)
+        self.resize(1280, 840)
         self.setMinimumSize(960, 640)
 
         self.profile_mgr = ProfileManager()
@@ -88,11 +88,11 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(top_panel)
 
-        # 2. Панель действий (кнопки)
+        # 2. Панель действий (кнопки и переключатель режима выполнения)
         group_actions = self._create_actions_group()
         main_layout.addWidget(group_actions)
 
-        # 3. Центральный блок: Таблица хостов + Консоль логов (сплиттер)
+        # 3. Центральный блок: Таблица хостов + Быстрая командная строка + Консоль логов (сплиттер)
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setHandleWidth(6)
 
@@ -100,7 +100,7 @@ class MainWindow(QMainWindow):
         table_container = QWidget()
         table_layout = QVBoxLayout(table_container)
         table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.setSpacing(4)
+        table_layout.setSpacing(6)
 
         table_header = QHBoxLayout()
         lbl_table = QLabel("Мониторинг клиентских компьютеров")
@@ -114,7 +114,37 @@ class MainWindow(QMainWindow):
 
         self.host_table = HostTableWidget()
         self.host_table.host_selected.connect(self._on_table_host_selected)
+        self.host_table.itemSelectionChanged.connect(self._update_stats_label)
+        self.host_table.context_action_requested.connect(self._handle_context_action)
         table_layout.addWidget(self.host_table)
+
+        # Интерактивная строка ввода команд под таблицей
+        quick_cmd_layout = QHBoxLayout()
+        quick_cmd_layout.setSpacing(6)
+
+        lbl_cmd = QLabel("Быстрая команда:")
+        lbl_cmd.setStyleSheet("font-weight: 600; color: #8aadf4;")
+        quick_cmd_layout.addWidget(lbl_cmd)
+
+        self.edit_quick_cmd = QLineEdit()
+        self.edit_quick_cmd.setPlaceholderText("Введите bash-команду (например: uptime, free -h, df -h, ls -la /tmp)...")
+        self.edit_quick_cmd.returnPressed.connect(self._on_quick_cmd_send)
+        quick_cmd_layout.addWidget(self.edit_quick_cmd, stretch=1)
+
+        self.cb_cmd_target = QComboBox()
+        self.cb_cmd_target.addItems([
+            "Цель: Выбранный в таблице ПК",
+            "Цель: Все ПК",
+        ])
+        quick_cmd_layout.addWidget(self.cb_cmd_target)
+
+        self.btn_send_cmd = QPushButton("🚀 Отправить")
+        self.btn_send_cmd.setObjectName("btn_primary")
+        self.btn_send_cmd.clicked.connect(self._on_quick_cmd_send)
+        quick_cmd_layout.addWidget(self.btn_send_cmd)
+
+        table_layout.addLayout(quick_cmd_layout)
+
         splitter.addWidget(table_container)
 
         # Консоль логов
@@ -224,6 +254,27 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(cred_layout)
 
+        # Переключатель: Общие / Раздельные учетные данные для каждого ПК
+        cred_mode_layout = QHBoxLayout()
+        lbl_cred_mode = QLabel("Режим учетных данных:")
+        lbl_cred_mode.setStyleSheet("font-weight: 600;")
+        cred_mode_layout.addWidget(lbl_cred_mode)
+
+        self.rb_common_creds = QRadioButton("Одинаковые учетные данные для всех")
+        self.rb_individual_creds = QRadioButton("Раздельные учетные данные для каждого ПК")
+        self.rb_common_creds.setChecked(True)
+        self.bg_creds = QButtonGroup(self)
+        self.bg_creds.addButton(self.rb_common_creds)
+        self.bg_creds.addButton(self.rb_individual_creds)
+
+        self.rb_common_creds.toggled.connect(self._on_credential_mode_changed)
+
+        cred_mode_layout.addWidget(self.rb_common_creds)
+        cred_mode_layout.addWidget(self.rb_individual_creds)
+        cred_mode_layout.addStretch()
+
+        layout.addLayout(cred_mode_layout)
+
         return group
 
     def _create_os_group(self) -> QGroupBox:
@@ -251,25 +302,44 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
 
+        # Переключатель режима выполнения задач (Параллельно / Поочередно)
+        mode_exec_layout = QHBoxLayout()
+        lbl_exec = QLabel("Режим выполнения задач:")
+        lbl_exec.setStyleSheet("font-weight: 600; color: #8aadf4;")
+        mode_exec_layout.addWidget(lbl_exec)
+
+        self.rb_mode_parallel = QRadioButton("Параллельно (все ПК)")
+        self.rb_mode_seq = QRadioButton("Поочередно (по 1 ПК)")
+        self.rb_mode_parallel.setChecked(True)
+        self.bg_mode = QButtonGroup(self)
+        self.bg_mode.addButton(self.rb_mode_parallel)
+        self.bg_mode.addButton(self.rb_mode_seq)
+
+        mode_exec_layout.addWidget(self.rb_mode_parallel)
+        mode_exec_layout.addWidget(self.rb_mode_seq)
+        mode_exec_layout.addStretch()
+
+        layout.addLayout(mode_exec_layout)
+
         row1 = QHBoxLayout()
         row1.setSpacing(8)
 
         self.btn_ping = QPushButton("📡 Проверить доступность (Ping/SSH)")
         self.btn_ping.setObjectName("btn_primary")
-        self.btn_ping.clicked.connect(self._action_check_availability)
+        self.btn_ping.clicked.connect(lambda: self._action_check_availability())
         row1.addWidget(self.btn_ping)
 
-        self.btn_update = QPushButton("🔄 Обновить систему на всех ПК")
+        self.btn_update = QPushButton("🔄 Обновить систему на ПК")
         self.btn_update.setObjectName("btn_warning")
-        self.btn_update.clicked.connect(self._action_update_system)
+        self.btn_update.clicked.connect(lambda: self._action_update_system())
         row1.addWidget(self.btn_update)
 
         self.btn_upload = QPushButton("📁 Передать файл")
-        self.btn_upload.clicked.connect(self._action_upload_file)
+        self.btn_upload.clicked.connect(lambda: self._action_upload_file())
         row1.addWidget(self.btn_upload)
 
         self.btn_upload_run = QPushButton("🚀 Передать и запустить")
-        self.btn_upload_run.clicked.connect(self._action_upload_and_run)
+        self.btn_upload_run.clicked.connect(lambda: self._action_upload_and_run())
         row1.addWidget(self.btn_upload_run)
 
         layout.addLayout(row1)
@@ -278,21 +348,21 @@ class MainWindow(QMainWindow):
         row2.setSpacing(8)
 
         self.btn_run_existing = QPushButton("▶️ Запустить существующий файл")
-        self.btn_run_existing.clicked.connect(self._action_run_existing)
+        self.btn_run_existing.clicked.connect(lambda: self._action_run_existing())
         row2.addWidget(self.btn_run_existing)
 
         self.btn_custom_cmd = QPushButton("⌨️ Выполнить произвольную команду")
-        self.btn_custom_cmd.clicked.connect(self._action_custom_command)
+        self.btn_custom_cmd.clicked.connect(lambda: self._action_custom_command())
         row2.addWidget(self.btn_custom_cmd)
 
-        self.btn_reboot = QPushButton("🔁 Перезагрузить все ПК")
+        self.btn_reboot = QPushButton("🔁 Перезагрузить ПК")
         self.btn_reboot.setObjectName("btn_danger")
-        self.btn_reboot.clicked.connect(self._action_reboot)
+        self.btn_reboot.clicked.connect(lambda: self._action_reboot())
         row2.addWidget(self.btn_reboot)
 
-        self.btn_poweroff = QPushButton("⏻ Выключить все ПК")
+        self.btn_poweroff = QPushButton("⏻ Выключить ПК")
         self.btn_poweroff.setObjectName("btn_danger")
-        self.btn_poweroff.clicked.connect(self._action_poweroff)
+        self.btn_poweroff.clicked.connect(lambda: self._action_poweroff())
         row2.addWidget(self.btn_poweroff)
 
         self.btn_cancel_task = QPushButton("⏹️ Остановить")
@@ -344,6 +414,18 @@ class MainWindow(QMainWindow):
         else:
             self.rb_root.setChecked(True)
 
+        use_ind = getattr(p, "use_individual_credentials", False)
+        if use_ind:
+            self.rb_individual_creds.setChecked(True)
+        else:
+            self.rb_common_creds.setChecked(True)
+
+        exec_mode = getattr(p, "execution_mode", "parallel")
+        if exec_mode == "sequential":
+            self.rb_mode_seq.setChecked(True)
+        else:
+            self.rb_mode_parallel.setChecked(True)
+
         idx_os = self.cb_os.findText(p.target_os)
         if idx_os >= 0:
             self.cb_os.setCurrentIndex(idx_os)
@@ -352,7 +434,21 @@ class MainWindow(QMainWindow):
         if idx_arch >= 0:
             self.cb_arch.setCurrentIndex(idx_arch)
 
-        self._apply_ips_to_table()
+        # Заполняем таблицу хостов данными профиля
+        ips, _ = parse_ip_targets(p.ip_range_text)
+        self.host_table.set_hosts(
+            ips,
+            host_credentials=getattr(p, "host_credentials", {}),
+            default_login=p.username,
+            default_password=p.password,
+        )
+        self.host_table.set_individual_credentials_mode(
+            use_ind,
+            default_login=p.username,
+            default_password=p.password,
+        )
+        self.log_viewer.set_host_list(ips)
+        self._update_stats_label()
 
     def _save_profile_dialog(self):
         cur_name = self.cb_profiles.currentText()
@@ -364,6 +460,10 @@ class MainWindow(QMainWindow):
             except ValueError:
                 port = 22
 
+            use_ind = self.rb_individual_creds.isChecked()
+            host_creds = self.host_table.get_host_credentials() if use_ind else {}
+            exec_mode = "sequential" if self.rb_mode_seq.isChecked() else "parallel"
+
             prof = ClassroomProfile(
                 name=name,
                 ip_range_text=self.edit_ips.text().strip(),
@@ -374,6 +474,9 @@ class MainWindow(QMainWindow):
                 target_os=self.cb_os.currentText(),
                 target_arch=self.cb_arch.currentText(),
                 description=desc,
+                use_individual_credentials=use_ind,
+                host_credentials=host_creds,
+                execution_mode=exec_mode,
             )
             self.profile_mgr.set(prof)
             self._load_profiles_into_ui()
@@ -401,6 +504,14 @@ class MainWindow(QMainWindow):
     def _on_ips_text_changed(self):
         pass
 
+    def _on_credential_mode_changed(self):
+        is_ind = self.rb_individual_creds.isChecked()
+        self.host_table.set_individual_credentials_mode(
+            is_ind,
+            default_login=self.edit_login.text().strip(),
+            default_password=self.edit_pass.text(),
+        )
+
     def _apply_ips_to_table(self):
         raw_text = self.edit_ips.text()
         ips, errors = parse_ip_targets(raw_text)
@@ -411,11 +522,36 @@ class MainWindow(QMainWindow):
                 err_msg += f"\n...и ещё {len(errors) - 5} ошибок."
             QMessageBox.warning(self, "Предупреждение валидации IP", f"Обнаружены некорректные адреса:\n{err_msg}")
 
-        self.host_table.set_hosts(ips)
+        existing_creds = self.host_table.get_host_credentials()
+        self.host_table.set_hosts(
+            ips,
+            host_credentials=existing_creds,
+            default_login=self.edit_login.text().strip(),
+            default_password=self.edit_pass.text(),
+        )
+        self.host_table.set_individual_credentials_mode(
+            self.rb_individual_creds.isChecked(),
+            default_login=self.edit_login.text().strip(),
+            default_password=self.edit_pass.text(),
+        )
         self.log_viewer.set_host_list(ips)
         self._update_stats_label()
 
-    def _get_target_ips(self) -> List[str]:
+    def _get_target_ips(self, explicit_ips: Optional[List[str]] = None, ignore_selection: bool = False) -> List[str]:
+        """
+        Возвращает целевые IP-адреса.
+        Если explicit_ips передан — возвращает его.
+        Если в таблице выделены строки и ignore_selection=False — возвращает только выделенные ПК.
+        Если ничего не выделено — возвращает все хосты.
+        """
+        if explicit_ips:
+            return explicit_ips
+
+        if not ignore_selection:
+            selected = self.host_table.get_selected_ips()
+            if selected:
+                return selected
+
         raw_text = self.edit_ips.text()
         ips, errors = parse_ip_targets(raw_text)
         if not ips:
@@ -441,31 +577,50 @@ class MainWindow(QMainWindow):
 
     def _update_stats_label(self):
         stats = self.host_table.get_summary_stats()
+        selected_count = len(self.host_table.get_selected_ips())
+        sel_text = f"  |  Выделено: <span style='color: #8aadf4; font-weight: bold;'>{selected_count}</span>" if selected_count > 0 else ""
         self.lbl_stats.setText(
-            f"Всего ПК: {stats['total']}  |  "
+            f"Всего ПК: {stats['total']}{sel_text}  |  "
             f"Онлайн: <span style='color: #a6e3a1; font-weight: bold;'>{stats['online']}</span>  |  "
             f"Ошибок: <span style='color: #fb7185; font-weight: bold;'>{stats['errors']}</span>"
         )
 
     # ------------------ Запуск асинхронных задач ------------------
 
-    def _start_task(self, task_type: str, task_name: str, extra_params: Optional[dict] = None):
-        ips = self._get_target_ips()
+    def _start_task(
+        self,
+        task_type: str,
+        task_name: str,
+        extra_params: Optional[dict] = None,
+        target_ips: Optional[List[str]] = None,
+    ):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
-        # Убедимся, что таблица заполнена этими IP
-        if self.host_table.rowCount() != len(ips):
-            self.host_table.set_hosts(ips)
-            self.log_viewer.set_host_list(ips)
+        # Заполняем таблицу хостов только если она пуста
+        if self.host_table.rowCount() == 0:
+            all_ips = self._get_target_ips(ignore_selection=True)
+            self.host_table.set_hosts(
+                all_ips,
+                default_login=self.edit_login.text().strip(),
+                default_password=self.edit_pass.text(),
+            )
+            self.log_viewer.set_host_list(all_ips)
 
         try:
             port = int(self.edit_port.text().strip() or "22")
         except ValueError:
             port = 22
 
-        # Блокируем кнопки действий
         self._set_ui_busy(True)
+
+        # Индивидуальные учетные данные при включенном раздельном режиме
+        host_creds = None
+        if self.rb_individual_creds.isChecked():
+            host_creds = self.host_table.get_host_credentials()
+
+        exec_mode = "sequential" if self.rb_mode_seq.isChecked() else "parallel"
 
         self.current_task_thread = AsyncTaskThread(
             task_type=task_type,
@@ -477,7 +632,9 @@ class MainWindow(QMainWindow):
             use_sudo=self.rb_sudo.isChecked(),
             target_os=self.cb_os.currentText(),
             target_arch=self.cb_arch.currentText(),
+            execution_mode=exec_mode,
             extra_params=extra_params or {},
+            host_credentials=host_creds,
         )
 
         # Подключаем сигналы
@@ -501,6 +658,8 @@ class MainWindow(QMainWindow):
         self.btn_reboot.setEnabled(not is_busy)
         self.btn_poweroff.setEnabled(not is_busy)
         self.btn_apply_ips.setEnabled(not is_busy)
+        self.btn_send_cmd.setEnabled(not is_busy)
+        self.edit_quick_cmd.setEnabled(not is_busy)
         self.btn_cancel_task.setEnabled(is_busy)
         self.progress_bar.setVisible(is_busy)
 
@@ -537,99 +696,153 @@ class MainWindow(QMainWindow):
             f"Подробности смотрите в таблице и консоли логов.",
         )
 
+    # ------------------ Контекстные действия ------------------
+
+    def _handle_context_action(self, action_name: str, ips: List[str]):
+        if action_name == "ping":
+            self._action_check_availability(target_ips=ips)
+        elif action_name == "custom_command":
+            self._action_custom_command(target_ips=ips)
+        elif action_name == "upload":
+            self._action_upload_file(target_ips=ips)
+        elif action_name == "reboot":
+            self._action_reboot(target_ips=ips)
+        elif action_name == "poweroff":
+            self._action_poweroff(target_ips=ips)
+
+    # ------------------ Интерактивная командная строка ------------------
+
+    def _on_quick_cmd_send(self):
+        cmd = self.edit_quick_cmd.text().strip()
+        if not cmd:
+            return
+
+        if self.cb_cmd_target.currentIndex() == 0:
+            # Цель: Выбранный в таблице ПК
+            targets = self.host_table.get_selected_ips()
+            if not targets:
+                QMessageBox.warning(
+                    self,
+                    "Цель не выбрана",
+                    "В таблице не выделен ни один компьютер.\n"
+                    "Выделите строку компьютера в таблице либо выберите цель «Цель: Все ПК».",
+                )
+                return
+        else:
+            # Цель: Все ПК
+            targets = self._get_target_ips(ignore_selection=True)
+            if not targets:
+                return
+
+        # Если выбран один хост, фильтруем консоль логов по нему
+        if len(targets) == 1:
+            self.log_viewer.set_filter_to_ip(targets[0])
+
+        is_bg = cmd.endswith("&") or "DISPLAY=" in cmd
+        short_label = cmd[:25] + "..." if len(cmd) > 25 else cmd
+        self._start_task(
+            "EXECUTE_COMMAND",
+            f"Команда: {short_label}",
+            extra_params={"command": cmd, "run_in_background": is_bg},
+            target_ips=targets,
+        )
+
     # ------------------ Действия кнопок ------------------
 
-    def _action_check_availability(self):
-        self._start_task("CHECK_AVAILABILITY", "Проверка доступности (Ping/SSH)")
+    def _action_check_availability(self, target_ips: Optional[List[str]] = None):
+        self._start_task("CHECK_AVAILABILITY", "Проверка доступности (Ping/SSH)", target_ips=target_ips)
 
-    def _action_update_system(self):
-        ips = self._get_target_ips()
+    def _action_update_system(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
         os_name = self.cb_os.currentText()
+        count_desc = f"выделенных ПК ({len(ips)} шт.)" if len(ips) != self.host_table.rowCount() else "всех ПК"
         dlg = ConfirmActionDialog(
             title="Подтверждение обновления системы",
-            action_name=f"Массовое обновление ПО ({os_name})",
+            action_name=f"Массовое обновление ПО ({os_name}) на {count_desc}",
             host_count=len(ips),
-            warning_text="Обновление пакетов потребляет интернет-трафик и дисковое пространство на всех компьютерах.",
+            warning_text="Обновление пакетов потребляет интернет-трафик и дисковое пространство на выбранных компьютерах.",
             is_dangerous=False,
             parent=self,
         )
         if dlg.exec():
-            self._start_task("UPDATE_SYSTEM", f"Обновление системы ({os_name})")
+            self._start_task("UPDATE_SYSTEM", f"Обновление системы ({os_name})", target_ips=ips)
 
-    def _action_upload_file(self):
-        ips = self._get_target_ips()
+    def _action_upload_file(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
         dlg = FileTransferDialog(and_run=False, default_user=self.edit_login.text(), parent=self)
         if dlg.exec():
             data = dlg.get_data()
-            self._start_task("UPLOAD_FILE", "Передача файла по SFTP", extra_params=data)
+            self._start_task("UPLOAD_FILE", "Передача файла по SFTP", extra_params=data, target_ips=ips)
 
-    def _action_upload_and_run(self):
-        ips = self._get_target_ips()
+    def _action_upload_and_run(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
         dlg = FileTransferDialog(and_run=True, default_user=self.edit_login.text(), parent=self)
         if dlg.exec():
             data = dlg.get_data()
-            self._start_task("UPLOAD_AND_RUN", "Передача и запуск файла", extra_params=data)
+            self._start_task("UPLOAD_AND_RUN", "Передача и запуск файла", extra_params=data, target_ips=ips)
 
-    def _action_run_existing(self):
-        ips = self._get_target_ips()
+    def _action_run_existing(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
         dlg = RunExistingFileDialog(self)
         if dlg.exec():
             data = dlg.get_data()
-            self._start_task("RUN_EXISTING", "Запуск существующего файла", extra_params=data)
+            self._start_task("RUN_EXISTING", "Запуск существующего файла", extra_params=data, target_ips=ips)
 
-    def _action_custom_command(self):
-        ips = self._get_target_ips()
+    def _action_custom_command(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
         dlg = RunCommandDialog(self)
         if dlg.exec():
             cmd = dlg.get_command()
-            self._start_task("EXECUTE_COMMAND", "Произвольная команда", extra_params={"command": cmd})
+            self._start_task("EXECUTE_COMMAND", "Произвольная команда", extra_params={"command": cmd}, target_ips=ips)
 
-    def _action_reboot(self):
-        ips = self._get_target_ips()
+    def _action_reboot(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
+        count_desc = f"выделенных ПК ({len(ips)} шт.)" if len(ips) != self.host_table.rowCount() else "всех клиентских ПК"
         dlg = ConfirmActionDialog(
             title="Подтверждение перезагрузки",
-            action_name="Перезагрузка всех клиентских ПК",
+            action_name=f"Перезагрузка {count_desc}",
             host_count=len(ips),
             warning_text="Внимание! Все несохраненные данные учащихся будут утеряны. Компьютеры будут немедленно перезагружены.",
             is_dangerous=True,
             parent=self,
         )
         if dlg.exec():
-            self._start_task("REBOOT", "Перезагрузка ПК")
+            self._start_task("REBOOT", "Перезагрузка ПК", target_ips=ips)
 
-    def _action_poweroff(self):
-        ips = self._get_target_ips()
+    def _action_poweroff(self, target_ips: Optional[List[str]] = None):
+        ips = self._get_target_ips(explicit_ips=target_ips)
         if not ips:
             return
 
+        count_desc = f"выделенных ПК ({len(ips)} шт.)" if len(ips) != self.host_table.rowCount() else "всех клиентских ПК"
         dlg = ConfirmActionDialog(
             title="Подтверждение выключения",
-            action_name="Выключение всех клиентских ПК (poweroff)",
+            action_name=f"Выключение {count_desc} (poweroff)",
             host_count=len(ips),
             warning_text="Внимание! Все клиентские компьютеры завершат работу и выключатся. Для повторного включения потребуется Wake-on-LAN или физическое включение.",
             is_dangerous=True,
             parent=self,
         )
         if dlg.exec():
-            self._start_task("POWEROFF", "Выключение ПК")
+            self._start_task("POWEROFF", "Выключение ПК", target_ips=ips)
 
     def _action_cancel_current_task(self):
         if self.current_task_thread and self.current_task_thread.isRunning():

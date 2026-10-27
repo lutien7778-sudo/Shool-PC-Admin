@@ -59,17 +59,50 @@ class OSCommandBuilder:
         remote_path: str,
         arguments: str = "",
         run_in_background: bool = False,
+        is_gui_app: bool = False,
         use_sudo: bool = False,
+        in_terminal: bool = False,
     ) -> str:
         """
         Команда выставления прав на исполнение (chmod +x) и запуска файла.
+
+        Параметры:
+            remote_path: Путь к файлу на удаленном хосте
+            arguments: Аргументы командной строки
+            run_in_background: Если True, запускает в фоне через nohup с отсоединением дескрипторов
+            is_gui_app: Если True, использует setsid/nohup с переменными окружения для GUI
+            use_sudo: Если True, оборачивает в sudo
+            in_terminal: Если True, запускает внутри GUI-терминала qterminal
         """
         args_str = f" {arguments.strip()}" if arguments.strip() else ""
-        if run_in_background:
-            # Запуск в фоне через nohup с перенаправлением вывода в лог-файл
-            cmd = f"chmod +x '{remote_path}' && nohup '{remote_path}'{args_str} > /tmp/exec_bg.log 2>&1 &"
+        is_py = remote_path.endswith(".py")
+        exec_target = f"python3 '{remote_path}'{args_str}" if is_py else f"'{remote_path}'{args_str}"
+        chmod_cmd = f"chmod +x '{remote_path}'"
+
+        gui_env = "DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XAUTHORITY=$HOME/.Xauthority"
+
+        if in_terminal:
+            # Запуск в графическом терминале qterminal с сохранением сессии bash
+            inner_cmd = f"{exec_target}; exec bash"
+            safe_inner = inner_cmd.replace('"', '\\"')
+            cmd = (
+                f"{chmod_cmd} && "
+                f"{gui_env} nohup qterminal -e bash -c \"{safe_inner}\" "
+                f">/dev/null 2>&1 < /dev/null &"
+            )
+        elif is_gui_app:
+            # Для GUI-приложений: полное отсоединение через setsid с переменными окружения
+            cmd = (
+                f"{chmod_cmd} && "
+                f"{gui_env} nohup setsid {exec_target} "
+                f">/dev/null 2>&1 < /dev/null &"
+            )
+        elif run_in_background:
+            # Запуск в фоне через nohup с полным отсоединением всех дескрипторов
+            cmd = f"{chmod_cmd} && nohup {exec_target} > /tmp/exec_bg.log 2>&1 < /dev/null &"
         else:
-            cmd = f"chmod +x '{remote_path}' && '{remote_path}'{args_str}"
+            cmd = f"{chmod_cmd} && {exec_target}"
+
         return cls.wrap_sudo(cmd, use_sudo)
 
     @classmethod

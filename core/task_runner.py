@@ -2,6 +2,10 @@
 Многопоточный диспетчер задач на базе PyQt6 и concurrent.futures.ThreadPoolExecutor.
 Обеспечивает параллельное выполнение операций на 20-30 ПК одновременно
 без блокировки графического интерфейса.
+
+Поддержка двух режимов выполнения:
+- «Параллельно»: max_workers = min(len(hosts), 5)
+- «Поочередно»: max_workers = 1 (строго последовательное выполнение)
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,6 +39,10 @@ class AsyncTaskThread(QThread):
     """
     Отдельный поток QThread, запускающий пул параллельных воркеров ThreadPoolExecutor.
     Гарантирует полную отзывчивость главного потока GUI.
+
+    Поддержка режимов выполнения:
+    - «Параллельно»: max_workers = min(len(hosts), 5)
+    - «Поочередно»: max_workers = 1
     """
 
     def __init__(
@@ -48,9 +56,11 @@ class AsyncTaskThread(QThread):
         use_sudo: bool,
         target_os: str,
         target_arch: str,
+        execution_mode: str = "parallel",  # "parallel" или "sequential"
         extra_params: Optional[dict] = None,
         max_workers: int = DEFAULT_MAX_WORKERS,
         timeout: int = DEFAULT_TIMEOUT_SEC,
+        host_credentials: Optional[Dict[str, Dict[str, str]]] = None,
     ):
         super().__init__()
         self.task_type = task_type
@@ -62,11 +72,21 @@ class AsyncTaskThread(QThread):
         self.use_sudo = use_sudo
         self.target_os = target_os
         self.target_arch = target_arch
+        self.execution_mode = execution_mode
         self.extra_params = extra_params or {}
         self.max_workers = max_workers
         self.timeout = timeout
+        self.host_credentials = host_credentials or {}
         self.signals = TaskRunnerSignals()
         self._is_cancelled = False
+
+    def _calculate_pool_size(self, total_hosts: int) -> int:
+        """Рассчитывает размер пула воркеров в зависимости от режима выполнения."""
+        if self.execution_mode == "sequential":
+            return 1
+        else:  # parallel
+            # Ограничиваем максимум 5 воркерами для параллельного режима (или len(hosts), до 5)
+            return min(self.max_workers, max(1, total_hosts), 5)
 
     def cancel(self):
         """Запрашивает отмену выполнения."""
@@ -84,8 +104,8 @@ class AsyncTaskThread(QThread):
         fail_count = 0
         completed = 0
 
-        # Ограничиваем количество потоков числом хостов (не более max_workers)
-        pool_size = min(self.max_workers, max(1, total))
+        # Рассчитываем размер пула воркеров на основе режима выполнения
+        pool_size = self._calculate_pool_size(total)
 
         with ThreadPoolExecutor(max_workers=pool_size, thread_name_prefix="SSHWorker") as executor:
             futures = {
@@ -127,11 +147,21 @@ class AsyncTaskThread(QThread):
         self.signals.host_status_changed.emit(ip, STATUS_PROGRESS, "Подключение...")
         self._emit_log(ip, "info", f"--- Старт задачи «{self.task_name}» ---")
 
+        # Получаем индивидуальные учетные данные для хоста, если заданы
+        user = self.username
+        passwd = self.password
+        if self.host_credentials and ip in self.host_credentials:
+            creds = self.host_credentials[ip]
+            if creds.get("username"):
+                user = creds["username"]
+            if "password" in creds:
+                passwd = creds["password"]
+
         worker = SSHHostWorker(
             ip=ip,
             port=self.port,
-            username=self.username,
-            password=self.password,
+            username=user,
+            password=passwd,
             timeout=self.timeout,
             use_sudo=self.use_sudo,
         )
@@ -150,7 +180,8 @@ class AsyncTaskThread(QThread):
                     self.signals.host_status_changed.emit(ip, STATUS_ERROR, "Пустая команда")
                     return False
                 wrapped_cmd = OSCommandBuilder.wrap_sudo(cmd, self.use_sudo)
-                return self._task_exec_command(worker, wrapped_cmd, "Произвольная команда")
+                is_bg = self.extra_params.get("run_in_background", False) or cmd.strip().endswith("&") or "DISPLAY=" in cmd
+                return self._task_exec_command(worker, wrapped_cmd, "Произвольная команда", wait_for_completion=not is_bg)
 
             elif self.task_type == "UPLOAD_FILE":
                 local_path = self.extra_params.get("local_path", "")
@@ -162,14 +193,27 @@ class AsyncTaskThread(QThread):
                 remote_path = self.extra_params.get("remote_path", "")
                 args = self.extra_params.get("arguments", "")
                 is_bg = self.extra_params.get("run_in_background", False)
-                return self._task_upload_and_run(worker, local_path, remote_path, args, is_bg)
+                is_gui = self.extra_params.get("is_gui_app", False)
+                in_terminal = self.extra_params.get("in_terminal", False)
+                return self._task_upload_and_run(worker, local_path, remote_path, args, is_bg, is_gui, in_terminal)
 
             elif self.task_type == "RUN_EXISTING":
                 remote_path = self.extra_params.get("remote_path", "")
                 args = self.extra_params.get("arguments", "")
                 is_bg = self.extra_params.get("run_in_background", False)
-                cmd = OSCommandBuilder.get_run_file_command(remote_path, args, is_bg, self.use_sudo)
-                return self._task_exec_command(worker, cmd, "Запуск файла")
+                is_gui = self.extra_params.get("is_gui_app", False)
+                in_terminal = self.extra_params.get("in_terminal", False)
+                cmd = OSCommandBuilder.get_run_file_command(
+                    remote_path,
+                    args,
+                    run_in_background=is_bg,
+                    is_gui_app=is_gui,
+                    use_sudo=self.use_sudo,
+                    in_terminal=in_terminal,
+                )
+                # Для GUI/терминальных/фоновых задач не ждем завершения
+                wait_for = not (is_gui or in_terminal or is_bg)
+                return self._task_exec_command(worker, cmd, "Запуск файла", wait_for_completion=wait_for)
 
             elif self.task_type == "REBOOT":
                 cmd = OSCommandBuilder.get_reboot_command(self.use_sudo)
@@ -198,14 +242,31 @@ class AsyncTaskThread(QThread):
             self._emit_log(worker.ip, "err", f"Недоступен: {msg}")
             return False
 
-    def _task_exec_command(self, worker: SSHHostWorker, command: str, label: str) -> bool:
+    def _task_exec_command(
+        self,
+        worker: SSHHostWorker,
+        command: str,
+        label: str,
+        wait_for_completion: bool = True,
+    ) -> bool:
         self.signals.host_status_changed.emit(worker.ip, STATUS_PROGRESS, f"Выполняется: {label}")
         self._emit_log(worker.ip, "info", f"Команда: {command}")
 
         def log_cb(st: str, line: str):
             self._emit_log(worker.ip, st, line)
 
-        code, _ = worker.execute_command_stream(command, log_callback=log_cb)
+        code, _ = worker.execute_command_stream(
+            command,
+            log_callback=log_cb,
+            wait_for_completion=wait_for_completion
+        )
+        
+        # Для фоновых задач (GUI/терминал) код 0 сразу после отправки
+        if not wait_for_completion:
+            self.signals.host_status_changed.emit(worker.ip, STATUS_SUCCESS, "Успешно запущен в фоне")
+            self._emit_log(worker.ip, "info", f"Запуск в фоновом режиме инициирован: «{label}»")
+            return True
+            
         if code == 0:
             self.signals.host_status_changed.emit(worker.ip, STATUS_SUCCESS, f"{label} выполнено (код 0)")
             self._emit_log(worker.ip, "info", f"Завершено успешно (exit code: 0)")
@@ -249,7 +310,9 @@ class AsyncTaskThread(QThread):
         local_path: str,
         remote_path: str,
         arguments: str,
-        run_in_background: bool,
+        run_in_background: bool = False,
+        is_gui_app: bool = False,
+        in_terminal: bool = False,
     ) -> bool:
         # Шаг 1: Передача файла
         self.signals.host_status_changed.emit(worker.ip, STATUS_PROGRESS, "Загрузка файла...")
@@ -264,5 +327,13 @@ class AsyncTaskThread(QThread):
 
         # Шаг 2: Запуск
         self.signals.host_status_changed.emit(worker.ip, STATUS_PROGRESS, "Запуск переданного файла...")
-        cmd = OSCommandBuilder.get_run_file_command(remote_path, arguments, run_in_background, self.use_sudo)
-        return self._task_exec_command(worker, cmd, "Запуск переданного файла")
+        cmd = OSCommandBuilder.get_run_file_command(
+            remote_path,
+            arguments,
+            run_in_background=run_in_background,
+            is_gui_app=is_gui_app,
+            use_sudo=self.use_sudo,
+            in_terminal=in_terminal,
+        )
+        wait_for = not (run_in_background or is_gui_app or in_terminal)
+        return self._task_exec_command(worker, cmd, "Запуск переданного файла", wait_for_completion=wait_for)

@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
 # Поддерживаемые операционные системы
@@ -34,7 +34,7 @@ SUPPORTED_ARCH = [
 ]
 
 DEFAULT_SSH_PORT = 22
-DEFAULT_TIMEOUT_SEC = 6
+DEFAULT_TIMEOUT_SEC = 15
 DEFAULT_MAX_WORKERS = 20
 
 
@@ -68,6 +68,9 @@ class ClassroomProfile:
     target_os: str = OS_ALT_LINUX
     target_arch: str = ARCH_X86_64
     description: str = ""
+    use_individual_credentials: bool = False
+    host_credentials: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    execution_mode: str = "parallel"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,6 +87,9 @@ class ClassroomProfile:
             target_os=data.get("target_os", OS_ALT_LINUX),
             target_arch=data.get("target_arch", ARCH_X86_64),
             description=data.get("description", ""),
+            use_individual_credentials=data.get("use_individual_credentials", False),
+            host_credentials=data.get("host_credentials", {}),
+            execution_mode=data.get("execution_mode", "parallel"),
         )
 
 

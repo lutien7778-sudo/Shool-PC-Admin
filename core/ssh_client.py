@@ -315,7 +315,7 @@ class SSHHostWorker:
         finally:
             self.close()
 
-    def _ensure_remote_dir(self, sftp: paramiko.SFTPClient, remote_directory: str) -> None:
+    def _ensure_remote_dir(self, sftp, remote_directory: str) -> None:
         """Рекурсивно создает директорию на удаленном хосте при отсутствии."""
         dirs = []
         head = remote_directory

@@ -22,3 +22,9 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
